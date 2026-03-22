@@ -1,7 +1,7 @@
 from math import ceil
 from typing import Optional, List, Tuple
 from sqlalchemy import select, func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload, joinedload
 from app.models import PostORM, AuthorORM, TagORM
 
 
@@ -41,3 +41,74 @@ class PostRepository:
             per_page).offset(start)).scalars().all()
 
         return total, items
+
+    def by_tags(self, tags: List[str]) -> List[PostORM]:
+        normalized_tags = [tag.strip().lower() for tag in tags if tag.strip()]
+
+        if not normalized_tags:
+            raise []
+
+        post_list = (
+            select(PostORM).options(
+                selectinload(PostORM.tags),
+                joinedload(PostORM.author)
+            ).where(PostORM.tags.any(func.lower(TagORM.name).in_(normalized_tags)))
+            .order_by(PostORM.id.asc())
+        )
+
+        posts = self.db.execute(post_list).scalars().all()
+
+        return posts
+
+    def ensure_author(self, name: str, email: str) -> AuthorORM:
+
+        author_obj = self.db.execute(select(AuthorORM).where(
+            AuthorORM.email == email)).scalar_one_or_none()
+
+        if author_obj:
+            return author_obj
+
+        author_obj = AuthorORM(name=name,
+                               email=email)
+        self.db.add(author_obj)
+        self.db.flush()
+        return author_obj
+
+    def ensure_tag(self, name: str) -> TagORM:
+        tag_obj = self.db.execute(select(TagORM).where(
+            func.lower(TagORM.name) == name.lower())).scalar_one_or_none()
+
+        if tag_obj:
+            return tag_obj
+
+        tag_obj = TagORM(name=name)
+        self.db.add(tag_obj)
+        self.db.flush()
+        return tag_obj
+
+    def create_post(self, title: str, content: str, author: Optional[dict], tags: List[dict]) -> PostORM:
+        author_obj = None
+        if author:
+            author_obj = self.ensure_author(
+                name=author["name"], email=author["email"])
+
+        post = PostORM(title=title, content=content, author=author_obj)
+        for tag in tags:
+            tag_obj = self.ensure_tag(name=tag["name"])
+            post.tags.append(tag_obj)
+
+        self.db.add(post)
+        self.db.flush()
+        self.db.refresh(post)
+        return post
+
+    def update_post(self, post: PostORM, updates: dict) -> PostORM:
+        for key, value in updates.items():
+            setattr(post, key, value)
+
+            self.db.add(post)
+            self.db.refresh(post)
+        return post
+
+    def delete_post(self, post: PostORM) -> None:
+        self.db.delete(post)
