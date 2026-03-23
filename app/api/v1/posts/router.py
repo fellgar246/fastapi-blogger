@@ -1,9 +1,9 @@
 from math import ceil
 
-from fastapi import APIRouter, Depends, Path, Query, status
+from fastapi import APIRouter, Depends, Path, Query, status, HTTPException
 from typing import List, Optional, Union, Literal
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError, HTTPException
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from app.core.db import get_db
 from .schemas import (PostPublic, PaginatedPost,
                       PostCreate, PostUpdate, PostSummary)
@@ -122,3 +122,38 @@ def create_post(post: PostCreate, db: Session = Depends(get_db)):
     except SQLAlchemyError:
         db.rollback()
         raise HTTPException(status_code=500, detail="Error creating post")
+
+
+@router.put("/{post_id}", response_model=PostPublic, response_description="Post actualizado exitosamente", response_model_exclude=True)
+def update_post(post_id: int, data: PostUpdate, db: Session = Depends(get_db)):
+    repository = PostRepository(db)
+    post = repository.get(post_id)
+
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    try:
+        updates = data.model_dump(exclude_unset=True)
+        post = repository.update_post(post, updates)
+        db.commit()
+        db.refresh(post)
+        return post
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error updating post")
+
+
+@router.delete("/{post_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_post(post_id: int, db: Session = Depends(get_db)):
+    repository = PostRepository(db)
+    post = repository.get(post_id)
+
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    try:
+        repository.delete_post(post)
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error deleting post")
