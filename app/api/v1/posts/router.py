@@ -1,7 +1,7 @@
 from math import ceil
 
-from fastapi import APIRouter, Depends, Path, Query, status, HTTPException
-from typing import List, Optional, Union, Literal
+from fastapi import APIRouter, Depends, Path, Query, status, HTTPException, UploadFile, File
+from typing import List, Optional, Union, Literal, Annotated
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from app.core.db import get_db
@@ -9,8 +9,26 @@ from .schemas import (PostPublic, PaginatedPost,
                       PostCreate, PostUpdate, PostSummary)
 from .repository import PostRepository
 from app.core.security import oauth2_scheme, get_current_user
+from app.services.file_storage import save_uploaded_image
+import time
+import asyncio
+import threading
 
 router = APIRouter(prefix="/posts", tags=["Posts"])
+
+
+# @router.get("/sync")
+# def sync_endpoint():
+#     print(
+#         f"Endpoint síncrono iniciado en hilo {threading.current_thread().name}")
+#     time.sleep(5)  # Simula una operación que tarda 5 segundos
+#     return {"message": "Operación síncrona completada"}
+
+
+# @router.get("/async")
+# async def async_endpoint():
+#     await asyncio.sleep(5)  # Simula una operación que tarda 5 segundos
+#     return {"message": "Operación asíncrona completada"}
 
 
 @router.get("", response_model=PaginatedPost)
@@ -103,15 +121,22 @@ def get_post(post_id: int = Path(
 
 
 @router.post("", response_model=PostPublic, response_description="Post creado exitosamente", status_code=status.HTTP_201_CREATED)
-def create_post(post: PostCreate, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+def create_post(post: Annotated[PostCreate, Depends(PostCreate.as_form)], image: Optional[UploadFile] = File(None), db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     repository = PostRepository(db)
+    saved = None
 
     try:
+        if image is not None:
+            saved = save_uploaded_image(image)
+
+        image_url = saved["url"] if saved else None
+
         post = repository.create_post(
             title=post.title,
             content=post.content,
             author=user,
-            tags=[tag.model_dump() for tag in post.tags]
+            tags=[tag.model_dump() for tag in post.tags],
+            image_url=image_url
         )
         db.commit()
         db.refresh(post)
