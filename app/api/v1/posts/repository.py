@@ -1,3 +1,4 @@
+from locale import normalize
 from math import ceil
 from typing import Optional, List, Tuple
 from sqlalchemy import select, func
@@ -75,8 +76,12 @@ class PostRepository:
         return author_obj
 
     def ensure_tag(self, name: str) -> TagORM:
+
+        normalize = name.strip().lower()
+
         tag_obj = self.db.execute(select(TagORM).where(
-            func.lower(TagORM.name) == name.lower())).scalar_one_or_none()
+            func.lower(TagORM.name) == normalize
+        )).scalar_one_or_none()
 
         if tag_obj:
             return tag_obj
@@ -94,8 +99,13 @@ class PostRepository:
 
         post = PostORM(title=title, content=content,
                        image_url=image_url, author=author_obj)
-        for tag in tags:
-            tag_obj = self.ensure_tag(name=tag["name"])
+
+        names = tags[0]["name"].split(",")
+        for name in names:
+            name = name.strip().lower()
+            if not name:
+                continue
+            tag_obj = self.ensure_tag(name)
             post.tags.append(tag_obj)
 
         self.db.add(post)

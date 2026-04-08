@@ -1,16 +1,17 @@
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Literal, Optional
 from fastapi.security import OAuth2PasswordBearer
 from fastapi import Depends, HTTPException, status
+from pwdlib import PasswordHash
 import jwt
-from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
+from jwt.exceptions import ExpiredSignatureError, InvalidTokenError, PyJWTError
+from sqlalchemy.orm import Session
+from app.core.config import settings
+from app.core.db import get_db
+from app.models.user import User
 
-SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-prod")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(
-    os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
-
+password_hash = PasswordHash.recommended()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 credentials_exc = HTTPException(
@@ -35,21 +36,26 @@ def raise_forbidden():
     )
 
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-    to_encode = data.copy()
-    expire = datetime.now(
-        timezone.utc) + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode.update({"exp": expire})
-    token = jwt.encode(payload=to_encode, key=SECRET_KEY, algorithm=ALGORITHM)
-    return token
+def invalid_credentials():
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Credenciales inválidas",
+    )
 
 
 def decode_token(token: str) -> dict:
-    playload = jwt.decode(jwt=token, key=SECRET_KEY, algorithms=[ALGORITHM])
+    playload = jwt.decode(jwt=token, key=settings.JWT_SECRET,
+                          algorithms=[settings.JWT_ALG])
     return playload
 
 
-async def get_current_user(token: str = Depends(oauth2_scheme)):
+def create_access_token(sub: str, minutes: int | None = None) -> str:
+    expire = datetime.now(
+        timezone.utc) + timedelta(minutes=minutes or settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    return jwt.encode({"sub": sub, "exp": expire}, settings.JWT_SECRET, algorithm=settings.JWT_ALG)
+
+
+async def get_current_user(db: Session = Depends(get_db),  token: str = Depends(oauth2_scheme)) -> User:
 
     try:
         playload = decode_token(token)
@@ -58,9 +64,40 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         if not sub or not username:
             raise credentials_exc
 
-        return {"email": sub, "username": username}
-
+        user_id = int(sub)
     except ExpiredSignatureError:
         raise raise_expired_token()
     except InvalidTokenError:
         raise credentials_exc
+    except PyJWTError:
+        raise invalid_credentials()
+
+    user = db.get(User, user_id)
+    if not user or not user.is_active:
+        raise invalid_credentials()
+
+    return user
+
+
+def hash_password(plain: str) -> str:
+    return password_hash.hash(plain)
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    return password_hash.verify(plain, hashed)
+
+
+def require_role(min_role: Literal["user", "editor", "admin"]):
+    order = {"user": 0, "editor": 1, "admin": 2}
+
+    def evaluation(user: User = Depends(get_current_user)) -> User:
+        if order[user.role] < order[min_role]:
+            raise raise_forbidden()
+        return user
+
+    return evaluation
+
+
+require_user = require_role("user")
+require_editor = require_role("editor")
+require_admin = require_role("admin")
