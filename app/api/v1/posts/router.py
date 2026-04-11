@@ -8,7 +8,7 @@ from app.core.db import get_db
 from .schemas import (PostPublic, PaginatedPost,
                       PostCreate, PostUpdate, PostSummary)
 from .repository import PostRepository
-from app.core.security import oauth2_scheme, get_current_user
+from app.core.security import auth2_token, oauth2_scheme, get_current_user
 from app.services.file_storage import save_uploaded_image
 import time
 import asyncio
@@ -188,3 +188,8 @@ def delete_post(post_id: int, db: Session = Depends(get_db)):
 @router.get("/secure")
 def secure_endpoint(token: str = Depends(oauth2_scheme)):
     return {"message": "Access granted with token", "token_recibido": token}
+
+
+@router.post("/token")
+async def token_endpoint(response=Depends(auth2_token)):
+    return response
