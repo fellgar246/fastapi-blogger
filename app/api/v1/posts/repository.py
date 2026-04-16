@@ -1,8 +1,11 @@
 from math import ceil
 from typing import Optional, List, Tuple
+from fastapi import Depends
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session, selectinload, joinedload
+from app.core.security import get_current_user
 from app.models import PostORM, TagORM, User
+from app.utils.slugify_utils import ensure_unique_slug, slugify_base
 
 
 class PostRepository:
@@ -13,6 +16,12 @@ class PostRepository:
 
         post_find = select(PostORM).where(PostORM.id == post_id)
         return self.db.execute(post_find).scalar_one_or_none()
+
+    def get_by_slug(self, slug: str) -> Optional[PostORM]:
+        query = (
+            select(PostORM).where(PostORM.slug == slug)
+        )
+        return self.db.execute(query).scalar_one_or_none()
 
     def search(self, query: Optional[str], order_by: str, direction: str, page: int, per_page: int) -> Tuple[int, List[PostORM]]:
         results = select(PostORM)
@@ -51,7 +60,7 @@ class PostRepository:
         post_list = (
             select(PostORM).options(
                 selectinload(PostORM.tags),
-                joinedload(PostORM.author)
+                joinedload(PostORM.user)
             ).where(PostORM.tags.any(func.lower(TagORM.name).in_(normalized_tags)))
             .order_by(PostORM.id.asc())
         )
@@ -65,13 +74,6 @@ class PostRepository:
         author_obj = self.db.execute(select(User).where(
             User.email == email)).scalar_one_or_none()
 
-        if author_obj:
-            return author_obj
-
-        author_obj = User(full_name=name,
-                          email=email)
-        self.db.add(author_obj)
-        self.db.flush()
         return author_obj
 
     def ensure_tag(self, name: str) -> TagORM:
@@ -90,14 +92,16 @@ class PostRepository:
         self.db.flush()
         return tag_obj
 
-    def create_post(self, title: str, content: str, author: Optional[dict], tags: List[dict], image_url: str) -> PostORM:
+    def create_post(self, title: str, content: str, tags: List[dict], image_url: str, category_id: Optional[int], author: User = Depends(get_current_user)) -> PostORM:
         author_obj = None
         if author:
             author_obj = self.ensure_author(
-                name=author["username"], email=author["email"])
+                author.full_name, author.email)
 
-        post = PostORM(title=title, content=content,
-                       image_url=image_url, author=author_obj)
+        unique_slug = ensure_unique_slug(self.db, title)
+
+        post = PostORM(title=title, slug=unique_slug, content=content,
+                       image_url=image_url, user=author_obj, category_id=category_id)
 
         names = tags[0]["name"].split(",")
         for name in names:

@@ -135,6 +135,7 @@ def create_post(post: Annotated[PostCreate, Depends(PostCreate.as_form)], image:
             title=post.title,
             content=post.content,
             author=user,
+            category_id=post.category_id,
             tags=[tag.model_dump() for tag in post.tags],
             image_url=image_url
         )
@@ -183,6 +184,20 @@ def delete_post(post_id: int, db: Session = Depends(get_db)):
     except SQLAlchemyError:
         db.rollback()
         raise HTTPException(status_code=500, detail="Error deleting post")
+
+
+@router.get("/post/{slug}", response_model=Union[PostPublic, PostSummary])
+def get_post_by_slug(slug: str, include_content: bool = Query(default=True, description="Include post content in the response"), db: Session = Depends(get_db)):
+    repository = PostRepository(db)
+    post = repository.get_by_slug(slug)
+
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    if include_content:
+        return PostPublic.model_validate(post, from_attributes=True)
+
+    return PostSummary.model_validate(post, from_attributes=True)
 
 
 @router.get("/secure")
